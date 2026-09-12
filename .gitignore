@@ -1,0 +1,10 @@
+# downloaded model weights (see download_models.py)
+models/*.onnx
+
+# local data
+data/
+reports/*.csv
+__pycache__/
+*.pyc
+.freebuff/
+.pytest_cache/
