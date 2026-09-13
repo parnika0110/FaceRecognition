@@ -98,3 +98,60 @@ def test_match_threshold_gating(tmp_path, monkeypatch):
 
 def test_default_threshold_is_calibrated_value():
     assert 0.0 < config.DEFAULT_MATCH_THRESHOLD < 1.0
+
+
+def test_match_uses_max_similarity_across_gallery(tmp_path, monkeypatch):
+    """A person with several gallery embeddings is matched by their best one."""
+    probe = np.zeros((10, 10, 3), dtype=np.uint8)
+    probe_vec = np.array([1.0, 0, 0, 0, 0, 0, 0, 0])
+    close = probe_vec.copy()          # cosine 1.0 to the probe
+    far = np.array([0.0, 1.0, 0, 0, 0, 0, 0, 0])  # cosine 0.0 to the probe
+
+    monkeypatch.setattr(FaceEmbedder, "embed", staticmethod(lambda image, face: probe_vec))
+    pipe = FacePipeline(detector=_FakeDetector(_FakeFace()))
+
+    # 'far' listed first: the max over the person's embeddings must win.
+    identity, score, per_person = pipe.match(
+        probe, [("multi", far), ("multi", close)], config.DEFAULT_MATCH_THRESHOLD
+    )
+    assert identity == "multi"
+    assert score == pytest.approx(1.0)
+    assert per_person["multi"] == pytest.approx(1.0)
+
+
+def test_threshold_boundary_is_inclusive(tmp_path, monkeypatch):
+    """Gating uses >=: a score exactly equal to the threshold is accepted."""
+    probe = np.zeros((10, 10, 3), dtype=np.uint8)
+    probe_vec = np.array([1.0, 0, 0, 0, 0, 0, 0, 0])
+    # Unit-norm vector at 60 degrees -> cosine exactly 0.5 in exact math.
+    edge = np.zeros(8, dtype=np.float32)
+    edge[0] = np.float32(0.5)
+    edge[1] = np.float32(np.sqrt(0.75))
+
+    monkeypatch.setattr(FaceEmbedder, "embed", staticmethod(lambda image, face: probe_vec))
+    pipe = FacePipeline(detector=_FakeDetector(_FakeFace()))
+
+    # Same inputs, same cosine code path -> bit-identical score, so the
+    # boundary comparison is exact regardless of float rounding.
+    sim = FaceEmbedder.cosine(probe_vec, edge)
+    identity, score, _ = pipe.match(probe, [("edge", edge)], sim)
+    assert score == sim
+    assert identity == "edge"
+
+    # The smallest representable step above the score must reject.
+    just_above = float(np.nextafter(sim, 1.0))
+    identity2, score2, _ = pipe.match(probe, [("edge", edge)], just_above)
+    assert identity2 is None and score2 < just_above
+
+
+def test_match_empty_gallery_returns_sentinel(tmp_path, monkeypatch):
+    """Documented empty-gallery result: (None, -1.0, {})."""
+    probe = np.zeros((10, 10, 3), dtype=np.uint8)
+    monkeypatch.setattr(
+        FaceEmbedder, "embed", staticmethod(lambda image, face: np.ones(8, dtype=np.float32))
+    )
+    pipe = FacePipeline(detector=_FakeDetector(_FakeFace()))
+    identity, score, per_person = pipe.match(probe, [], config.DEFAULT_MATCH_THRESHOLD)
+    assert identity is None
+    assert score == -1.0
+    assert per_person == {}

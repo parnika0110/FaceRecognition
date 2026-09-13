@@ -6,7 +6,7 @@ Built for the Code Nimbus Solutions AI/ML Intern assignment.
 
 ## What it does
 
-- **Enroll** people from photos (or a webcam): detects the face, extracts a 128-D embedding, stores it in a local database.
+- **Enroll** people from photos: detects the face, extracts a 128-D embedding, stores it in a local database.
 - **Identify** new faces: detects faces, embeds them, matches against the enrolled gallery by cosine similarity.
 - **Unknown rejection**: if the best similarity is below the calibrated threshold, the face is reported as `Unknown` instead of forcing a wrong match.
 - **Evaluation**: verification ROC/AUC/EER, threshold sweep, closed-set rank-1 accuracy and open-set (unseen-person) false-accept rate on the LFW dataset.
@@ -49,9 +49,13 @@ python cli.py live
 ## Evaluation on LFW
 
 ```bash
-python scripts/prepare_lfw.py     # downloads LFW via scikit-learn, saves crops to data/lfw
+python scripts/prepare_lfw.py     # downloads LFW via scikit-learn, saves crops to data/lfw_crops
 python evaluate.py                # writes reports/metrics.json + plots
 ```
+
+The first `prepare_lfw.py` run downloads ~200 MB of LFW and takes ~20-30 minutes on CPU
+(resumable); crops and embeddings are cached to disk, so later runs and `evaluate.py`
+finish in minutes.
 
 Protocol (details in `evaluate.py`):
 
@@ -71,7 +75,7 @@ LFW (funneled), 1,680 people, 9,164 images, cached SFace embeddings, 70,963 veri
 | EER | **2.95%** @ τ = 0.256 |
 | Accuracy-max operating point | τ = 0.36 → accuracy **99.3%**, FAR 0.10%, FRR 3.8% |
 | Closed-set identification (1,443-embedding gallery) | rank-1 **98.5%** (710/721) |
-| Open-set rejection (378 unseen-identity probes, τ = 0.36) | 30.6% rejected |
+| Open-set rejection (800 probes from 180 unseen identities, τ = 0.36) | 30.6% rejected |
 
 `reports/roc_curve.png`, `reports/threshold_sweep.png`, `reports/score_distribution.png` and the full
 sweep/FPIR table in `reports/metrics.json` are committed so every number above is reproducible.
@@ -89,12 +93,14 @@ unknowns wrongly accepted — exactly what we measure (FPIR = 69% at τ = 0.36):
 | 0.40 | 26.5% |
 | **0.45** | **3.4%** |
 | 0.50 | 0.25% |
-| 0.65 | 0.13% (residual = LFW lookalikes/mislabeled twins) |
+| 0.65 | 0.25% |
+| 0.70 | 0.13% (residual = LFW lookalikes/mislabeled twins) |
 
-So the system ships **two documented operating points** (`faceid/config.py`):
+So the system ships **two selectable operating points** (`faceid/config.py`, exposed as `--policy` on `identify` and `live`):
 
-- `DEFAULT_MATCH_THRESHOLD = 0.36` — 1:1 / friendly small-gallery use.
-- `OPEN_SET_MATCH_THRESHOLD = 0.45` — untrusted-gallery / security use; `cli.py identify --images ... --threshold 0.45`.
+- `--policy default` → `DEFAULT_MATCH_THRESHOLD = 0.36` — 1:1 / friendly small-gallery use.
+- `--policy open-set` → `OPEN_SET_MATCH_THRESHOLD = 0.45` — untrusted-gallery / security use.
+- An explicit `--threshold` value overrides the policy, e.g. `python cli.py identify --images probe.jpg --threshold 0.50`.
 
 All reported metrics come from `python evaluate.py`, run end-to-end on CPU in minutes — no cloud, no spend.
 
@@ -102,7 +108,11 @@ All reported metrics come from `python evaluate.py`, run end-to-end on CPU in mi
 
 Calibrated on LFW by `evaluate.py`, never hand-picked: the sweep reports the accuracy-max point
 (chosen for the default), a Youden's-J point, and an EER point; the full table is in
-`reports/metrics.json`. Override per call: `python cli.py identify --images probe.jpg --threshold 0.45`.
+`reports/metrics.json`. Select per call with `--policy default|open-set`, or override with an
+explicit `--threshold` value.
+
+**Disclosure:** thresholds are selected on the same LFW evaluation set (no held-out calibration
+split); a production system would calibrate on a separate split.
 
 ## Design decisions
 
@@ -139,7 +149,7 @@ Calibrated on LFW by `evaluate.py`, never hand-picked: the sweep reports the acc
 ## Repository layout
 
 ```
-faceid/            core package (detector, embedder, database, matcher, config)
+faceid/            core package (detector, embedder, database, config)
 cli.py             enroll / identify / live / list / remove
 evaluate.py        LFW evaluation → reports/
 scripts/           LFW preparation
@@ -152,9 +162,9 @@ models/            downloaded at setup (gitignored)
 ## Run the tests
 
 ```bash
-python -m pytest tests/ -v
+pytest -q                # or: python -m pytest -q
 ```
 
 ## License
 
-Code: MIT. Models: Apache-2.0 (OpenCV Zoo).
+Code: [MIT](LICENSE). Models: Apache-2.0 (OpenCV Zoo).

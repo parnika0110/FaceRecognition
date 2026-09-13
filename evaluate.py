@@ -181,11 +181,23 @@ def main() -> int:
         rank1_total += 1
         rank1_hits += int(best == person)
 
-    unknown_vecs = [get_embedding(p, cache) for n in unseen_names for p in people3[n]]
-    unknown_vecs += [get_embedding(p, cache) for imgs in people2.values() for p in imgs]
-    if len(unknown_vecs) > 800:
-        unknown_vecs = rng.sample(unknown_vecs, 800)
+    # Unknown (open-set) probe pool: probes from the held-out identities plus
+    # every 2-image identity (too few images for closed-set probes), capped at
+    # 800. Each probe keeps its identity label so the pool's true
+    # distinct-identity count can be reported alongside the probe count.
+    # sorted(): `unseen_names` is a set, whose iteration order is randomized per
+    # Python process. Sorting before building the pool makes the seeded
+    # rng.sample(pool, 800) below select the identical subset every run.
+    unknown_pool: list[tuple[str, np.ndarray]] = []
+    unknown_pool += [(n, get_embedding(p, cache)) for n in sorted(unseen_names) for p in people3[n]]
+    unknown_pool += [(n, get_embedding(p, cache)) for n, imgs in people2.items() for p in imgs]
+    if len(unknown_pool) > 800:
+        # Same (n, k) as before -> identical RNG stream and identical probe
+        # selection, so the committed metrics remain exactly reproducible.
+        unknown_pool = rng.sample(unknown_pool, 800)
+    unknown_vecs = [vec for _, vec in unknown_pool]
     unknown_total = len(unknown_vecs)
+    distinct_unknown_identities = len({name for name, _ in unknown_pool})
     t = acc_point["threshold"]
     unknown_hits = sum(1 for v in unknown_vecs if float(np.max(gallery_matrix @ v)) < t)
 
@@ -225,8 +237,12 @@ def main() -> int:
         },
         "open_set_rejection": {
             "operating_threshold": t,
+            # Identities deliberately held out of the gallery (>= 3 images).
             "n_unseen_identities": len(unseen_names),
             "n_unknown_probes": unknown_total,
+            # True distinct identities in the probe pool (held-out identities
+            # + 2-image identities, after the 800-probe cap).
+            "distinct_identities_in_probe_pool": distinct_unknown_identities,
             "correctly_rejected_rate": round(unknown_hits / max(unknown_total, 1), 4),
             "fpir_by_threshold": fpir_curve,
             "gallery_embeddings": len(gallery_vecs),

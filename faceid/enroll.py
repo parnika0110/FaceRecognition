@@ -32,8 +32,7 @@ def enroll_person(
     """Enroll one or more images for `person`.
 
     Guards:
-      * refuses images with no / multiple faces (picks the strongest if you pass
-        allow_duplicates=False it still refuses ambiguous multi-face images),
+      * refuses images with no face or multiple faces,
       * caps embeddings per person,
       * warns when a new face is suspiciously similar to another identity.
     """
@@ -77,7 +76,7 @@ def enroll_person(
             if best and best[0] != person and best[1] >= config.DUPLICATE_SIMILARITY_WARN:
                 report.warnings.append(
                     f"{path}: similarity {best[1]:.3f} to enrolled person '{best[0]}' "
-                    f"— possible duplicate enrollment"
+                    f"- possible duplicate enrollment"
                 )
 
         db.add(person, vec, source=path)

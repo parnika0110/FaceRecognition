@@ -22,6 +22,15 @@ def _load_image(path: str):
     return img
 
 
+def resolve_threshold(args) -> float:
+    """Pick the match threshold: explicit --threshold beats --policy."""
+    if args.threshold is not None:
+        return args.threshold
+    if args.policy == "open-set":
+        return config.OPEN_SET_MATCH_THRESHOLD
+    return config.DEFAULT_MATCH_THRESHOLD
+
+
 def cmd_enroll(args) -> None:
     with GalleryDB(args.db) as db:
         report = enroll_person(
@@ -46,6 +55,7 @@ def cmd_identify(args) -> None:
     if not gallery:
         raise SystemExit("error: gallery is empty — enroll someone first")
 
+    threshold = resolve_threshold(args)
     results = []
     for path in args.images:
         img = _load_image(path)
@@ -55,19 +65,19 @@ def cmd_identify(args) -> None:
             print(f"{path}: no face detected")
         else:
             face = faces[0]
-            identity, score, per_person = pipeline.match(img, gallery, args.threshold)
+            identity, score, per_person = pipeline.match(img, gallery, threshold)
             entry = {
                 "image": path,
                 "status": "ok",
                 "identity": identity if identity else "Unknown",
                 "score": round(score, 4),
-                "threshold": args.threshold,
+                "threshold": threshold,
                 "faces_detected": len(faces),
                 "low_quality": any(FaceEmbedder.quality_flags(f)["too_small"] for f in faces),
                 "top_matches": sorted(per_person.items(), key=lambda kv: -kv[1])[: args.top_k],
             }
             label = identity if identity else "Unknown"
-            print(f"{path}: {label}  (cosine={score:.3f}, threshold={args.threshold:.3f})")
+            print(f"{path}: {label}  (cosine={score:.3f}, threshold={threshold:.3f})")
             if not identity:
                 ranked = ", ".join(f"{n}={s:.3f}" for n, s in entry["top_matches"])
                 if ranked:
@@ -151,6 +161,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", default=str(config.DB_PATH), help="gallery database path")
     sub = p.add_subparsers(dest="command", required=True)
 
+    def add_threshold_args(parser, threshold_help=""):
+        parser.add_argument(
+            "--policy", choices=("default", "open-set"), default="default",
+            help="threshold policy: 'default' = accuracy-max pairwise point, "
+                 "'open-set' = stricter threshold for large/untrusted galleries",
+        )
+        parser.add_argument(
+            "--threshold", type=float, default=None,
+            help=threshold_help or "explicit threshold (overrides --policy)",
+        )
+
     e = sub.add_parser("enroll", help="enroll a person from one or more images")
     e.add_argument("--name", required=True)
     e.add_argument("--images", nargs="+", required=True)
@@ -160,7 +181,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     i = sub.add_parser("identify", help="identify people in images")
     i.add_argument("--images", nargs="+", required=True)
-    i.add_argument("--threshold", type=float, default=config.DEFAULT_MATCH_THRESHOLD)
+    add_threshold_args(i)
     i.add_argument("--top-k", type=int, default=3)
     i.add_argument("--json", action="store_true", help="also print JSON results")
     i.set_defaults(func=cmd_identify)
@@ -175,7 +196,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     l = sub.add_parser("live", help="webcam demo")
     l.add_argument("--camera", type=int, default=0)
-    l.add_argument("--threshold", type=float, default=config.DEFAULT_MATCH_THRESHOLD)
+    add_threshold_args(l)
     l.set_defaults(func=cmd_live)
 
     return p
