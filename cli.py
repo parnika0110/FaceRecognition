@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 
 import cv2
@@ -13,6 +14,9 @@ from faceid.database import GalleryDB
 from faceid.detector import FaceDetector
 from faceid.embedder import FaceEmbedder, FacePipeline
 from faceid.enroll import enroll_person
+
+
+logger = logging.getLogger(__name__)
 
 
 def _load_image(path: str):
@@ -39,11 +43,11 @@ def cmd_enroll(args) -> None:
             args.images,
             allow_duplicates=args.allow_duplicates,
         )
-    print(f"Enrolled '{report.person}': {report.added} new embedding(s)")
+    logger.info(f"Enrolled '{report.person}': {report.added} new embedding(s)")
     for s in report.skipped:
-        print(f"  skipped: {s}")
+        logger.info(f"  skipped: {s}")
     for w in report.warnings:
-        print(f"  WARNING: {w}")
+        logger.warning(f"  WARNING: {w}")
     if report.added == 0:
         sys.exit(1)
 
@@ -62,7 +66,7 @@ def cmd_identify(args) -> None:
         faces = pipeline.detect_faces(img)
         if not faces:
             entry = {"image": path, "status": "no_face"}
-            print(f"{path}: no face detected")
+            logger.info(f"{path}: no face detected")
         else:
             face = faces[0]
             identity, score, per_person = pipeline.match(img, gallery, threshold)
@@ -77,11 +81,11 @@ def cmd_identify(args) -> None:
                 "top_matches": sorted(per_person.items(), key=lambda kv: -kv[1])[: args.top_k],
             }
             label = identity if identity else "Unknown"
-            print(f"{path}: {label}  (cosine={score:.3f}, threshold={threshold:.3f})")
+            logger.info(f"{path}: {label}  (cosine={score:.3f}, threshold={threshold:.3f})")
             if not identity:
                 ranked = ", ".join(f"{n}={s:.3f}" for n, s in entry["top_matches"])
                 if ranked:
-                    print(f"    best candidates below threshold: {ranked}")
+                    logger.info(f"    best candidates below threshold: {ranked}")
         results.append(entry)
 
     if args.json:
@@ -92,23 +96,23 @@ def cmd_list(args) -> None:
     with GalleryDB(args.db) as db:
         rows = db.people()
     if not rows:
-        print("Gallery is empty.")
+        logger.info("Gallery is empty.")
         return
-    print(f"{len(rows)} person(s), {sum(c for _, c in rows)} embeddings total:")
+    logger.info(f"{len(rows)} person(s), {sum(c for _, c in rows)} embeddings total:")
     for name, count in rows:
-        print(f"  {name}: {count} embedding(s)")
+        logger.info(f"  {name}: {count} embedding(s)")
 
 
 def cmd_remove(args) -> None:
     with GalleryDB(args.db) as db:
         removed = db.remove_person(args.name)
-    print(f"Removed {removed} embedding(s) for '{args.name}'.")
+    logger.info(f"Removed {removed} embedding(s) for '{args.name}'.")
 
 
 def cmd_clear(args) -> None:
     with GalleryDB(args.db) as db:
         removed = db.clear()
-    print(f"Removed {removed} embedding(s). Gallery is now empty.")
+    logger.info(f"Removed {removed} embedding(s). Gallery is now empty.")
 
 
 def cmd_live(args) -> None:
@@ -117,13 +121,15 @@ def cmd_live(args) -> None:
     with GalleryDB(args.db) as db:
         gallery = db.all_vectors()
     if not gallery:
-        print("Gallery is empty — enroll someone first (python cli.py enroll ...).")
-        print("Starting anyway so you can verify detection.")
+        logger.info("Gallery is empty — enroll someone first (python cli.py enroll ...).")
+        logger.info("Starting anyway so you can verify detection.")
 
     cap = cv2.VideoCapture(args.camera)
     if not cap.isOpened():
         raise SystemExit(f"error: cannot open camera {args.camera}")
-    print("Press q to quit.")
+    logger.info("Press q to quit.")
+
+    threshold = resolve_threshold(args)
 
     while True:
         ok, frame = cap.read()
@@ -139,7 +145,7 @@ def cmd_live(args) -> None:
                 if sim > best_score:
                     best_name, best_score = name, sim
 
-            identity = best_name if (best_name and best_score >= args.threshold) else None
+            identity = best_name if (best_name and best_score >= threshold) else None
             label = f"{identity} {best_score:.2f}" if identity else f"Unknown {best_score:.2f}"
             color = (0, 200, 0) if identity else (0, 0, 220)
 
@@ -203,6 +209,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     args = build_parser().parse_args()
     args.func(args)
 
